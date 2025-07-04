@@ -2,300 +2,78 @@
 Modulo per l'analisi AI dei dati GSC
 """
 
-import streamlit as st
 import pandas as pd
+import streamlit as st
 import openai
 from typing import Dict, List, Optional
 import json
 from datetime import datetime, timedelta
 
 class AIAnalyzer:
-    """Analizzatore AI per i dati di Google Search Console"""
+    """Analyzer AI per dati Google Search Console"""
     
     def __init__(self):
         self.client = None
         self.setup_openai()
         
     def setup_openai(self):
-        """Configura OpenAI"""
+        """Configura OpenAI client"""
+        if st.secrets.get("OPENAI_API_KEY"):
+            openai.api_key = st.secrets["OPENAI_API_KEY"]
+        else:
+            st.warning("⚠️ OpenAI API key non configurata")
+    
+    def analyze_data(self, data: pd.DataFrame, query: str, context: Dict = None) -> str:
+        """Analizza i dati con OpenAI"""
+        if not st.secrets.get("OPENAI_API_KEY"):
+            return self._generate_fallback_analysis(data, query)
+        
         try:
-            api_key = st.secrets.get("OPENAI_API_KEY")
-            if api_key:
-                openai.api_key = api_key
-                self.client = openai
-            else:
-                st.warning("⚠️ OpenAI API key non configurata")
-        except Exception as e:
-            st.error(f"Errore configurazione OpenAI: {str(e)}")
-    
-    def analyze_traffic_trends(self, data: pd.DataFrame, period_days: int = 30) -> str:
-        """Analizza i trend del traffico"""
-        if data.empty or not self.client:
-            return "Dati non disponibili per l'analisi"
-        
-        # Prepara i dati per l'analisi
-        daily_data = data.groupby('date').agg({
-            'clicks': 'sum',
-            'impressions': 'sum',
-            'ctr': 'mean',
-            'position': 'mean'
-        }).reset_index()
-        
-        # Calcola statistiche
-        stats = {
-            'total_clicks': daily_data['clicks'].sum(),
-            'avg_daily_clicks': daily_data['clicks'].mean(),
-            'clicks_trend': self._calculate_trend(daily_data['clicks']),
-            'ctr_avg': daily_data['ctr'].mean(),
-            'position_avg': daily_data['position'].mean(),
-            'best_day': daily_data.loc[daily_data['clicks'].idxmax(), 'date'].strftime('%Y-%m-%d'),
-            'worst_day': daily_data.loc[daily_data['clicks'].idxmin(), 'date'].strftime('%Y-%m-%d')
-        }
-        
-        prompt = f"""
-        Analizza questi dati di traffico SEO per gli ultimi {period_days} giorni:
-        
-        📊 STATISTICHE PRINCIPALI:
-        - Clicks totali: {stats['total_clicks']:,}
-        - Clicks medi giornalieri: {stats['avg_daily_clicks']:.0f}
-        - Trend clicks: {stats['clicks_trend']}
-        - CTR medio: {stats['ctr_avg']:.2%}
-        - Posizione media: {stats['position_avg']:.1f}
-        - Giorno migliore: {stats['best_day']}
-        - Giorno peggiore: {stats['worst_day']}
-        
-        Fornisci un'analisi dettagliata in italiano che includa:
-        1. Valutazione delle performance generali
-        2. Identificazione di pattern e trend
-        3. Possibili cause dei picchi/cali
-        4. Raccomandazioni actionable per migliorare
-        
-        Usa un tono professionale ma accessibile.
-        """
-        
-        return self._get_ai_response(prompt)
-    
-    def analyze_keyword_opportunities(self, data: pd.DataFrame, min_impressions: int = 100) -> str:
-        """Analizza opportunità di keyword"""
-        if data.empty or not self.client:
-            return "Dati non disponibili per l'analisi"
-        
-        # Filtra e analizza le query
-        query_data = data.groupby('query').agg({
-            'clicks': 'sum',
-            'impressions': 'sum',
-            'ctr': 'mean',
-            'position': 'mean'
-        }).reset_index()
-        
-        # Identifica opportunità
-        opportunities = query_data[
-            (query_data['impressions'] >= min_impressions) &
-            (query_data['position'] > 3) &
-            (query_data['ctr'] < 0.05)
-        ].sort_values('impressions', ascending=False).head(10)
-        
-        high_potential = query_data[
-            (query_data['position'] <= 10) &
-            (query_data['position'] > 3) &
-            (query_data['impressions'] >= min_impressions)
-        ].sort_values(['impressions', 'position'], ascending=[False, True]).head(10)
-        
-        opportunities_text = opportunities[['query', 'impressions', 'position', 'ctr']].to_string(index=False)
-        high_potential_text = high_potential[['query', 'impressions', 'position', 'ctr']].to_string(index=False)
-        
-        prompt = f"""
-        Analizza queste opportunità di keyword SEO:
-        
-        🎯 QUERY CON BASSO CTR MA ALTE IMPRESSIONI:
-        {opportunities_text}
-        
-        🚀 QUERY AD ALTO POTENZIALE (posizione 4-10):
-        {high_potential_text}
-        
-        Fornisci un'analisi che includa:
-        1. Prioritizzazione delle opportunità
-        2. Strategie specifiche per migliorare il ranking
-        3. Stima del potenziale traffico aggiuntivo
-        4. Azioni concrete da implementare
-        
-        Rispondi in italiano con suggerimenti pratici.
-        """
-        
-        return self._get_ai_response(prompt)
-    
-    def analyze_content_performance(self, data: pd.DataFrame) -> str:
-        """Analizza performance dei contenuti"""
-        if data.empty or not self.client:
-            return "Dati non disponibili per l'analisi"
-        
-        # Analizza le pagine
-        page_data = data.groupby('page').agg({
-            'clicks': 'sum',
-            'impressions': 'sum',
-            'ctr': 'mean',
-            'position': 'mean'
-        }).reset_index()
-        
-        # Identifica top e bottom performers
-        top_pages = page_data.nlargest(10, 'clicks')[['page', 'clicks', 'impressions', 'ctr', 'position']]
-        bottom_pages = page_data[page_data['clicks'] > 0].nsmallest(10, 'ctr')[['page', 'clicks', 'impressions', 'ctr', 'position']]
-        
-        prompt = f"""
-        Analizza le performance dei contenuti:
-        
-        🏆 TOP 10 PAGINE PER CLICKS:
-        {top_pages.to_string(index=False)}
-        
-        ⚠️ PAGINE CON BASSO CTR:
-        {bottom_pages.to_string(index=False)}
-        
-        Fornisci un'analisi che includa:
-        1. Valutazione delle pagine top performer
-        2. Identificazione di problemi nelle pagine con basso CTR
-        3. Suggerimenti per ottimizzare i contenuti
-        4. Strategie per migliorare la user experience
-        
-        Rispondi in italiano con consigli pratici.
-        """
-        
-        return self._get_ai_response(prompt)
-    
-    def compare_periods(self, current_data: pd.DataFrame, previous_data: pd.DataFrame) -> str:
-        """Confronta due periodi di dati"""
-        if current_data.empty or previous_data.empty or not self.client:
-            return "Dati non disponibili per il confronto"
-        
-        # Calcola metriche per entrambi i periodi
-        current_stats = self._calculate_period_stats(current_data)
-        previous_stats = self._calculate_period_stats(previous_data)
-        
-        # Calcola variazioni
-        changes = {}
-        for key in current_stats:
-            if key in previous_stats and previous_stats[key] != 0:
-                change = ((current_stats[key] - previous_stats[key]) / previous_stats[key]) * 100
-                changes[key] = change
-        
-        prompt = f"""
-        Confronto tra due periodi di dati SEO:
-        
-        📊 PERIODO CORRENTE:
-        - Clicks: {current_stats['clicks']:,}
-        - Impressions: {current_stats['impressions']:,}
-        - CTR: {current_stats['ctr']:.2%}
-        - Posizione media: {current_stats['position']:.1f}
-        
-        📊 PERIODO PRECEDENTE:
-        - Clicks: {previous_stats['clicks']:,}
-        - Impressions: {previous_stats['impressions']:,}
-        - CTR: {previous_stats['ctr']:.2%}
-        - Posizione media: {previous_stats['position']:.1f}
-        
-        📈 VARIAZIONI:
-        - Clicks: {changes.get('clicks', 0):+.1f}%
-        - Impressions: {changes.get('impressions', 0):+.1f}%
-        - CTR: {changes.get('ctr', 0):+.1f}%
-        - Posizione: {changes.get('position', 0):+.1f}%
-        
-        Fornisci un'analisi che includa:
-        1. Valutazione delle performance complessive
-        2. Identificazione di trend positivi/negativi
-        3. Possibili cause dei cambiamenti
-        4. Raccomandazioni per il futuro
-        
-        Rispondi in italiano con insights actionable.
-        """
-        
-        return self._get_ai_response(prompt)
-    
-    def analyze_branded_traffic(self, data: pd.DataFrame, brand_keywords: List[str]) -> str:
-        """Analizza il traffico branded vs non-branded"""
-        if data.empty or not self.client:
-            return "Dati non disponibili per l'analisi"
-        
-        # Classifica le query
-        brand_pattern = '|'.join([kw.lower() for kw in brand_keywords])
-        data['is_branded'] = data['query'].str.lower().str.contains(brand_pattern, na=False)
-        
-        # Calcola statistiche
-        branded_stats = data[data['is_branded']].agg({
-            'clicks': 'sum',
-            'impressions': 'sum',
-            'ctr': 'mean',
-            'position': 'mean'
-        })
-        
-        nonbranded_stats = data[~data['is_branded']].agg({
-            'clicks': 'sum',
-            'impressions': 'sum',
-            'ctr': 'mean',
-            'position': 'mean'
-        })
-        
-        total_clicks = branded_stats['clicks'] + nonbranded_stats['clicks']
-        branded_percentage = (branded_stats['clicks'] / total_clicks * 100) if total_clicks > 0 else 0
-        
-        prompt = f"""
-        Analisi del traffico branded vs non-branded:
-        
-        🏷️ TRAFFICO BRANDED:
-        - Clicks: {branded_stats['clicks']:,} ({branded_percentage:.1f}%)
-        - Impressions: {branded_stats['impressions']:,}
-        - CTR: {branded_stats['ctr']:.2%}
-        - Posizione media: {branded_stats['position']:.1f}
-        
-        🔍 TRAFFICO NON-BRANDED:
-        - Clicks: {nonbranded_stats['clicks']:,} ({100-branded_percentage:.1f}%)
-        - Impressions: {nonbranded_stats['impressions']:,}
-        - CTR: {nonbranded_stats['ctr']:.2%}
-        - Posizione media: {nonbranded_stats['position']:.1f}
-        
-        Brand keywords analizzate: {', '.join(brand_keywords)}
-        
-        Fornisci un'analisi che includa:
-        1. Valutazione del brand awareness
-        2. Opportunità di crescita nel traffico non-branded
-        3. Strategie per bilanciare branded/non-branded
-        4. Raccomandazioni per la brand strategy
-        
-        Rispondi in italiano con insights strategici.
-        """
-        
-        return self._get_ai_response(prompt)
-    
-    def custom_analysis(self, data: pd.DataFrame, user_query: str) -> str:
-        """Analisi personalizzata basata su query utente"""
-        if data.empty or not self.client:
-            return "Dati non disponibili per l'analisi"
-        
-        # Prepara summary dei dati
-        data_summary = self._prepare_data_summary(data)
-        
-        prompt = f"""
-        Dati di Google Search Console:
-        {data_summary}
-        
-        Domanda specifica dell'utente: {user_query}
-        
-        Fornisci un'analisi dettagliata che risponda alla domanda specifica.
-        Includi dati numerici quando possibile e suggerimenti actionable.
-        Rispondi in italiano in modo professionale e chiaro.
-        """
-        
-        return self._get_ai_response(prompt)
-    
-    def _get_ai_response(self, prompt: str) -> str:
-        """Ottieni risposta da OpenAI"""
-        try:
-            response = self.client.ChatCompletion.create(
+            # Prepara il contesto dei dati
+            data_summary = self._prepare_data_summary(data)
+            
+            # Aggiungi contesto aggiuntivo se fornito
+            context_info = ""
+            if context:
+                context_info = f"\nContesto aggiuntivo: {json.dumps(context, indent=2)}"
+            
+            # Costruisci il prompt
+            prompt = f"""
+            Sei un esperto SEO analyst e digital marketer. Analizza i seguenti dati di Google Search Console e fornisci insights actionable in italiano.
+
+            DATI GOOGLE SEARCH CONSOLE:
+            {data_summary}
+            {context_info}
+
+            DOMANDA/RICHIESTA DELL'UTENTE:
+            {query}
+
+            ISTRUZIONI:
+            1. Fornisci un'analisi dettagliata e specifica
+            2. Identifica trends, opportunità e problemi
+            3. Suggerisci azioni concrete e misurabili
+            4. Usa un linguaggio professionale ma comprensibile
+            5. Includi metriche specifiche quando possibile
+            6. Struttura la risposta in modo chiaro con sezioni
+            
+            STRUTTURA RISPOSTA:
+            📊 **Analisi dei Dati**
+            🔍 **Insights Chiave**
+            💡 **Raccomandazioni**
+            📈 **Prossimi Passi**
+            """
+            
+            response = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[
                     {
                         "role": "system", 
-                        "content": "Sei un esperto consulente SEO e digital marketing. Fornisci sempre analisi dettagliate, basate sui dati e con suggerimenti pratici. Usa un linguaggio professionale ma accessibile."
+                        "content": "Sei un esperto SEO analyst che fornisce insights basati su dati concreti. Rispondi sempre in italiano con analisi dettagliate e actionable."
                     },
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
                 ],
                 max_tokens=1500,
                 temperature=0.7
@@ -304,68 +82,164 @@ class AIAnalyzer:
             return response.choices[0].message.content
             
         except Exception as e:
-            return f"Errore nell'analisi AI: {str(e)}"
+            return f"❌ Errore nell'analisi AI: {str(e)}\n\n{self._generate_fallback_analysis(data, query)}"
     
     def _prepare_data_summary(self, data: pd.DataFrame) -> str:
-        """Prepara summary dei dati"""
+        """Prepara un riassunto dei dati per l'AI"""
         if data.empty:
-            return "Nessun dato disponibile"
+            return "⚠️ Nessun dato disponibile per l'analisi"
         
-        # Calcola statistiche di base
-        stats = {
-            'total_clicks': data['clicks'].sum(),
-            'total_impressions': data['impressions'].sum(),
-            'avg_ctr': data['ctr'].mean(),
-            'avg_position': data['position'].mean(),
-            'unique_queries': data['query'].nunique() if 'query' in data.columns else 0,
-            'unique_pages': data['page'].nunique() if 'page' in data.columns else 0,
-            'date_range': f"{data['date'].min()} - {data['date'].max()}" if 'date' in data.columns else "N/A"
-        }
+        summary_parts = []
+        
+        # Informazioni generali
+        summary_parts.append(f"📅 Periodo: {data['date'].min()} - {data['date'].max()}" if 'date' in data.columns else "")
+        summary_parts.append(f"📊 Righe di dati: {len(data):,}")
+        
+        # Metriche principali
+        if 'clicks' in data.columns:
+            summary_parts.append(f"🖱️ Click totali: {data['clicks'].sum():,}")
+        if 'impressions' in data.columns:
+            summary_parts.append(f"👁️ Impressioni totali: {data['impressions'].sum():,}")
+        if 'ctr' in data.columns:
+            summary_parts.append(f"📊 CTR medio: {data['ctr'].mean():.2%}")
+        if 'position' in data.columns:
+            summary_parts.append(f"📍 Posizione media: {data['position'].mean():.1f}")
+        
+        # Analisi per query
+        if 'query' in data.columns:
+            top_queries = data.groupby('query')['clicks'].sum().sort_values(ascending=False).head(10)
+            summary_parts.append(f"🔍 Query uniche: {data['query'].nunique():,}")
+            summary_parts.append(f"🏆 Top 5 query per click: {top_queries.head().to_dict()}")
+        
+        # Analisi per pagina
+        if 'page' in data.columns:
+            top_pages = data.groupby('page')['clicks'].sum().sort_values(ascending=False).head(5)
+            summary_parts.append(f"📄 Pagine uniche: {data['page'].nunique():,}")
+            summary_parts.append(f"🏆 Top 5 pagine per click: {top_pages.to_dict()}")
+        
+        # Trend temporali
+        if 'date' in data.columns:
+            daily_data = data.groupby('date').agg({
+                'clicks': 'sum',
+                'impressions': 'sum' if 'impressions' in data.columns else 'count'
+            }).reset_index()
+            
+            if len(daily_data) > 1:
+                recent_avg = daily_data.tail(7)['clicks'].mean()
+                older_avg = daily_data.head(7)['clicks'].mean()
+                trend = "📈 Crescita" if recent_avg > older_avg else "📉 Calo"
+                summary_parts.append(f"📊 Trend recente: {trend} ({recent_avg:.0f} vs {older_avg:.0f} click medi)")
+        
+        return "\n".join(filter(None, summary_parts))
+    
+    def _generate_fallback_analysis(self, data: pd.DataFrame, query: str) -> str:
+        """Genera un'analisi base senza AI"""
+        if data.empty:
+            return "⚠️ Nessun dato disponibile per l'analisi richiesta."
+        
+        analysis = "📊 **Analisi Automatica dei Dati**\n\n"
+        
+        # Metriche base
+        if 'clicks' in data.columns:
+            total_clicks = data['clicks'].sum()
+            analysis += f"🖱️ **Click totali**: {total_clicks:,}\n"
+        
+        if 'impressions' in data.columns:
+            total_impressions = data['impressions'].sum()
+            analysis += f"👁️ **Impressioni totali**: {total_impressions:,}\n"
+        
+        if 'ctr' in data.columns:
+            avg_ctr = data['ctr'].mean()
+            analysis += f"📊 **CTR medio**: {avg_ctr:.2%}\n"
+        
+        if 'position' in data.columns:
+            avg_position = data['position'].mean()
+            analysis += f"📍 **Posizione media**: {avg_position:.1f}\n"
         
         # Top performers
-        top_queries = ""
         if 'query' in data.columns:
-            top_q = data.groupby('query')['clicks'].sum().sort_values(ascending=False).head(5)
-            top_queries = ", ".join([f"{q}: {clicks}" for q, clicks in top_q.items()])
+            top_queries = data.groupby('query')['clicks'].sum().sort_values(ascending=False).head(5)
+            analysis += f"\n🏆 **Top 5 Query per Click**:\n"
+            for query, clicks in top_queries.items():
+                analysis += f"• {query}: {clicks:,} click\n"
         
-        summary = f"""
-        📊 RIEPILOGO DATI:
-        - Periodo: {stats['date_range']}
-        - Clicks totali: {stats['total_clicks']:,}
-        - Impressions totali: {stats['total_impressions']:,}
-        - CTR medio: {stats['avg_ctr']:.2%}
-        - Posizione media: {stats['avg_position']:.1f}
-        - Query uniche: {stats['unique_queries']:,}
-        - Pagine uniche: {stats['unique_pages']:,}
-        - Top 5 query per clicks: {top_queries}
-        """
+        analysis += "\n💡 **Raccomandazione**: Configura OpenAI API per analisi avanzate personalizzate."
         
-        return summary
+        return analysis
     
-    def _calculate_trend(self, series: pd.Series) -> str:
-        """Calcola il trend di una serie temporale"""
-        if len(series) < 2:
-            return "Dati insufficienti"
-        
-        # Calcola la pendenza usando regressione lineare semplice
-        x = range(len(series))
-        y = series.values
-        
-        # Correlazione di Pearson come indicatore di trend
-        correlation = pd.Series(x).corr(pd.Series(y))
-        
-        if correlation > 0.3:
-            return "Crescente"
-        elif correlation < -0.3:
-            return "Decrescente"
-        else:
-            return "Stabile"
+    def get_suggested_queries(self) -> List[str]:
+        """Ottieni query suggerite per l'analisi"""
+        return [
+            "Quanto traffico di brand abbiamo ottenuto negli ultimi 3 mesi rispetto ai 3 mesi precedenti?",
+            "Quali sono le query con il miglior potenziale di crescita?",
+            "Come sta performando il traffico branded vs non-branded?",
+            "Quali pagine hanno perso più traffico nell'ultimo mese?",
+            "Identifica opportunità di ottimizzazione basate sui dati CTR",
+            "Analizza la cannibalizzazione delle keyword",
+            "Quali query hanno posizione media alta ma CTR basso?",
+            "Identifica le pagine con maggior potenziale di miglioramento",
+            "Come si distribuisce il traffico per device (mobile vs desktop)?",
+            "Quali sono i trend stagionali del nostro traffico organico?"
+        ]
     
-    def _calculate_period_stats(self, data: pd.DataFrame) -> Dict:
-        """Calcola statistiche per un periodo"""
-        return {
-            'clicks': data['clicks'].sum(),
-            'impressions': data['impressions'].sum(),
-            'ctr': data['ctr'].mean(),
-            'position': data['position'].mean()
-        }
+    def analyze_competitors(self, our_data: pd.DataFrame, competitor_keywords: List[str]) -> str:
+        """Analizza la competizione per keyword specifiche"""
+        if not competitor_keywords:
+            return "⚠️ Nessuna keyword competitor specificata"
+        
+        # Filtra i dati per keyword competitor
+        competitor_data = our_data[
+            our_data['query'].str.contains('|'.join(competitor_keywords), case=False, na=False)
+        ] if 'query' in our_data.columns else pd.DataFrame()
+        
+        if competitor_data.empty:
+            return f"ℹ️ Nessun dato trovato per le keyword competitor: {', '.join(competitor_keywords)}"
+        
+        analysis = "🏆 **Analisi Competitiva**\n\n"
+        
+        total_clicks = competitor_data['clicks'].sum()
+        avg_position = competitor_data['position'].mean()
+        
+        analysis += f"📊 **Metriche Competitor Keywords**:\n"
+        analysis += f"• Click totali: {total_clicks:,}\n"
+        analysis += f"• Posizione media: {avg_position:.1f}\n"
+        analysis += f"• Query monitorate: {len(competitor_data)}\n"
+        
+        # Top performing competitor keywords
+        if len(competitor_data) > 0:
+            top_competitor_queries = competitor_data.groupby('query')['clicks'].sum().sort_values(ascending=False).head(5)
+            analysis += f"\n🎯 **Top Competitor Keywords**:\n"
+            for query, clicks in top_competitor_queries.items():
+                analysis += f"• {query}: {clicks:,} click\n"
+        
+        return analysis
+    
+    def generate_report(self, data: pd.DataFrame, period: str = "monthly") -> str:
+        """Genera un report completo"""
+        if data.empty:
+            return "⚠️ Nessun dato disponibile per il report"
+        
+        report = f"📋 **Report {period.title()} - Google Search Console**\n\n"
+        
+        # Executive Summary
+        report += "## 📊 Executive Summary\n\n"
+        
+        if 'clicks' in data.columns and 'impressions' in data.columns:
+            total_clicks = data['clicks'].sum()
+            total_impressions = data['impressions'].sum()
+            avg_ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
+            
+            report += f"• **Performance**: {total_clicks:,} click da {total_impressions:,} impressioni\n"
+            report += f"• **CTR**: {avg_ctr:.2f}%\n"
+        
+        if 'position' in data.columns:
+            avg_position = data['position'].mean()
+            report += f"• **Posizione Media**: {avg_position:.1f}\n"
+        
+        if 'query' in data.columns:
+            unique_queries = data['query'].nunique()
+            report += f"• **Query Monitorate**: {unique_queries:,}\n"
+        
+        report += "\n💡 **Raccomandazione**: Utilizza l'analisi AI per insights più dettagliati e actionable.\n"
+        
+        return report
